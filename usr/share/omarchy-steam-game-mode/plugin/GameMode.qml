@@ -6,7 +6,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "omarchy.gamemode"
+  moduleName: "user.gamemode"
 
   property bool isInstalled: false
 
