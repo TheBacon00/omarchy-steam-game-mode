@@ -1,0 +1,228 @@
+#!/bin/bash
+# omarchy:summary=Gamescope compositor launch script
+
+# --- Runtime socket setup ---
+tmpdir="$( [[ -n ${XDG_RUNTIME_DIR+x} ]] && mktemp -p "$XDG_RUNTIME_DIR" -d -t gamescope.XXXXXXX )"
+socket="${tmpdir:+$tmpdir/startup.socket}"
+stats="${tmpdir:+$tmpdir/stats.pipe}"
+
+if [[ -z $tmpdir || -z ${XDG_RUNTIME_DIR+x} ]]; then
+    echo >&2 "!! XDG_RUNTIME_DIR not set, cannot create gamescope sockets"
+    exit 1
+fi
+
+# --- Detect display resolution and max refresh rate ---
+# This runs before Hyprland (or any compositor) exists in this session, so
+# detection has to come straight from the kernel. modetest -c reports the
+# connector's already-fully-negotiated mode list (the kernel has already
+# parsed the base EDID *and* any CTA/DisplayID extension blocks), so it's
+# authoritative for both resolution and per-resolution max refresh in one
+# read — critically, the real max refresh at the resolution gamescope will
+# actually run at, not a blanket "monitor max" that might only be reachable
+# at a lower resolution. Reading the EDID's Display Range Limits descriptor
+# directly is resolution-unaware: on one real test rig it reported a rate
+# only reachable at a lower resolution than the panel's native/preferred
+# one, which would tell gamescope to force a mode the display link doesn't
+# actually support at that resolution. Falls back to /sys/class/drm sysfs
+# (resolution) + the EDID range descriptor (refresh) if modetest is ever
+# unavailable, since it's a transitive dependency of the graphics stack
+# (libdrm) and should always be present alongside gamescope itself.
+#
+# The max refresh matters even without a specific target rate: gamescope's
+# default mode pick (no -r given) can land on a non-max-refresh mode, and a
+# mode's programmed pixel clock is a hard ceiling adaptive-sync can never
+# exceed — it can only vary below whatever is programmed.
+read -r SCREEN_WIDTH SCREEN_HEIGHT SCREEN_REFRESH <<<"$(python3 - <<'PYEOF'
+import glob
+import re
+import subprocess
+
+
+def detect_via_modetest():
+    try:
+        out = subprocess.run(["modetest", "-c"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    conn_re = re.compile(r"^\d+\s+\d+\s+(connected|disconnected)\s+(\S+)")
+    mode_re = re.compile(r"^\s*#\d+\s+(\d+)x(\d+)\s+([\d.]+)\s.*type:\s*(.*)$")
+
+    in_connected = False
+    modes = []
+    for line in out.splitlines():
+        m = conn_re.match(line)
+        if m:
+            if in_connected and modes:
+                break
+            in_connected = m.group(1) == "connected"
+            continue
+        if not in_connected:
+            continue
+        m = mode_re.match(line)
+        if m:
+            w, h, refresh, type_field = m.groups()
+            modes.append((int(w), int(h), float(refresh), "preferred" in type_field))
+
+    if not modes:
+        return None
+
+    preferred = next((m for m in modes if m[3]), modes[0])
+    target_w, target_h = preferred[0], preferred[1]
+    best_refresh = max(r for w, h, r, _ in modes if w == target_w and h == target_h)
+    return target_w, target_h, round(best_refresh)
+
+
+def detect_via_sysfs():
+    def read_file(path):
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    width = height = refresh = None
+    for status_path in sorted(glob.glob("/sys/class/drm/*/status")):
+        status = read_file(status_path)
+        if not status or status.strip() != b"connected":
+            continue
+        base = status_path[: -len("/status")]
+
+        modes = read_file(base + "/modes")
+        if modes:
+            first_mode = modes.decode(errors="ignore").splitlines()[0:1]
+            if first_mode and "x" in first_mode[0]:
+                width, height = (int(v) for v in first_mode[0].split("x", 1))
+
+        edid = read_file(base + "/edid")
+        if edid and len(edid) >= 128:
+            for offset in (54, 72, 90, 108):
+                block = edid[offset : offset + 18]
+                if len(block) == 18 and block[0] == 0 and block[1] == 0 and block[2] == 0 and block[3] == 0xFD:
+                    refresh = block[6]
+                    break
+
+        if width and height:
+            break
+
+    if not width or not height:
+        return None
+    return width, height, (refresh or 60)
+
+
+result = detect_via_modetest() or detect_via_sysfs() or (3440, 1440, 60)
+print(f"{result[0]} {result[1]} {result[2]}")
+PYEOF
+)"
+
+# --- Environment variables ---
+export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
+export STEAM_MULTIPLE_XWAYLANDS=1
+export STEAM_GAMESCOPE_NIS_SUPPORTED=1
+export STEAM_GAMESCOPE_HDR_SUPPORTED=1
+export STEAM_GAMESCOPE_HAS_TEARING_SUPPORT=1
+export STEAM_GAMESCOPE_TEARING_SUPPORTED=1
+export STEAM_GAMESCOPE_VRR_SUPPORTED=1
+export STEAM_DISPLAY_REFRESH_LIMITS="48,${SCREEN_REFRESH}"
+export ENABLE_GAMESCOPE_WSI=1
+export vk_xwayland_wait_ready=false
+export GAMESCOPE_NV12_COLORSPACE=k_EStreamColorspace_BT601
+export VKD3D_SWAPCHAIN_LATENCY_FRAMES=3
+export QT_QPA_PLATFORM=xcb
+
+# MangoHud
+export MANGOHUD_CONFIGFILE="${tmpdir:+$tmpdir/mangohud.config}"
+mkdir -p "$(dirname "$MANGOHUD_CONFIGFILE")"
+echo "no_display" > "$MANGOHUD_CONFIGFILE"
+
+# Gamescope mode/EDID save files
+export GAMESCOPE_MODE_SAVE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/gamescope/modes.cfg"
+export GAMESCOPE_PATCHED_EDID_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/gamescope/edid.bin"
+mkdir -p "$(dirname "$GAMESCOPE_MODE_SAVE_FILE")"
+touch "$GAMESCOPE_MODE_SAVE_FILE"
+mkdir -p "$(dirname "$GAMESCOPE_PATCHED_EDID_FILE")"
+touch "$GAMESCOPE_PATCHED_EDID_FILE"
+
+# VRS config
+export RADV_FORCE_VRS_CONFIG_FILE="$(mktemp /tmp/radv_vrs.XXXXXXXX)"
+echo "1x1" > "$RADV_FORCE_VRS_CONFIG_FILE"
+
+# Limiter
+export GAMESCOPE_LIMITER_FILE="$(mktemp /tmp/gamescope-limiter.XXXXXXXX)"
+export GAMESCOPE_DISABLE_ASYNC_FLIPS=1
+
+# Raise fd limit
+ulimit -n 524288
+
+# --- Stats/socket setup ---
+export GAMESCOPE_STATS="$stats"
+mkfifo -- "$stats"
+mkfifo -- "$socket"
+
+# Claim global session link
+linkname="gamescope-stats"
+sessionlink="${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/}${linkname}"
+lockfile="$sessionlink".lck
+exec 9>"$lockfile"
+if flock -n 9 && rm -f "$sessionlink" && ln -sf "$tmpdir" "$sessionlink"; then
+    echo >&2 "Claimed global gamescope stats session"
+else
+    echo >&2 "!! Failed to claim global gamescope stats session"
+fi
+
+# --- Read gamescope environment when it starts ---
+read_gamescope_env() {
+    if read -r -t 5 response_x_display response_wl_display <> "$socket"; then
+        export DISPLAY="$response_x_display"
+        export GAMESCOPE_WAYLAND_DISPLAY="$response_wl_display"
+        # Export environment so omarchy-steam-launcher.service can pick it up
+        env > "$XDG_RUNTIME_DIR/gamescope-environment"
+        systemd-notify --ready
+    else
+        echo >&2 "!! gamescope failed to start within 5 seconds"
+        systemd-notify --ready  # notify anyway so systemd doesn't hang
+    fi
+}
+
+# Spawn the env reader in parallel
+(read_gamescope_env &)
+
+# --- Launch gamescope ---
+# HDR options (only if supported)
+HDR_OPTIONS=""
+if gamescope --help 2>&1 | grep -q -- "--hdr-enabled"; then
+    HDR_OPTIONS="--hdr-enabled"
+fi
+
+# --- VRR capability diagnostic (non-fatal) ---
+# adaptive-sync can only ever work if the kernel/driver itself reports the
+# connected connector as vrr_capable. If this is 0, no gamescope flag or
+# Steam setting will make VRR happen - it's a driver/monitor/cable issue.
+# Log clearly so a VRR failure is never silently mysterious.
+vrr_ok=0
+for cap in /sys/class/drm/*/vrr_capable; do
+    [[ -r $cap ]] || continue
+    conn_status="$(dirname "$cap")/status"
+    if [[ $(cat "$conn_status" 2>/dev/null) == "connected" && $(cat "$cap" 2>/dev/null) == "1" ]]; then
+        vrr_ok=1
+    fi
+done
+if (( vrr_ok == 0 )); then
+    logger "omarchy-gamescope-session: WARNING - no connected DRM connector reports vrr_capable=1. VRR/adaptive-sync cannot work regardless of gamescope/Steam settings. Check the monitor's FreeSync/G-Sync setting, that it's connected via DisplayPort, and GPU driver VRR support."
+else
+    logger "omarchy-gamescope-session: VRR-capable connector detected; adaptive-sync will be launched and kept enabled."
+fi
+
+exec gamescope \
+    -W "$SCREEN_WIDTH" -H "$SCREEN_HEIGHT" \
+    -w "$SCREEN_WIDTH" -h "$SCREEN_HEIGHT" \
+    -r "$SCREEN_REFRESH" \
+    -f \
+    --generate-drm-mode fixed \
+    --adaptive-sync \
+    $HDR_OPTIONS \
+    --xwayland-count 2 \
+    --default-touch-mode 4 \
+    --hide-cursor-delay 3000 \
+    --fade-out-duration 200 \
+    -e -R "$socket" -T "$stats" \
+    --steam

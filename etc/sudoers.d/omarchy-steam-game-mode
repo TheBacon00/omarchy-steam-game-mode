@@ -1,0 +1,6 @@
+# Allow the desktop keybinding/bar widget and Steam's "Switch to Desktop"
+# button to switch display-manager sessions without prompting for a password.
+# The arguments are strictly verified so the NOPASSWD grant cannot be abused
+# to pass arbitrary parameters.
+%wheel ALL=(root) NOPASSWD: /usr/bin/omarchy-steamos-session-select gamescope
+%wheel ALL=(root) NOPASSWD: /usr/bin/omarchy-steamos-session-select plasma

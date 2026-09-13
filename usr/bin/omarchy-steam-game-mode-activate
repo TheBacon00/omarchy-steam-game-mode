@@ -1,0 +1,93 @@
+#!/bin/bash
+# omarchy:summary=Activate Steam Game Mode for the current user
+
+set -e
+
+if [[ $EUID -eq 0 ]]; then
+    echo "ERROR: Run this as your own user, not as root or via sudo."
+    echo "       It writes to \$HOME and elevates internally where needed."
+    exit 1
+fi
+
+# ─── 1. Prerequisites ───────────────────────────────────────────────────────
+
+DM_UNIT="$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)"
+if [[ "${DM_UNIT%.service}" != "sddm" ]]; then
+    echo "ERROR: This package requires SDDM as the display manager."
+    echo "       Detected: ${DM_UNIT:-none}"
+    exit 1
+fi
+
+# ─── 2. Register the bar widget for this user ───────────────────────────────
+# The plugin lives read-only under the package's own share/ directory; each
+# activating user gets their own writable copy under ~/.config/omarchy, the
+# same as any other Omarchy shell plugin (see: omarchy plugin clone).
+
+PLUGIN_SRC="/usr/share/omarchy-steam-game-mode/plugin"
+PLUGIN_DEST="$HOME/.config/omarchy/plugins/user.gamemode"
+
+echo "Installing bar widget..."
+mkdir -p "$PLUGIN_DEST"
+cp "$PLUGIN_SRC/manifest.json" "$PLUGIN_DEST/manifest.json"
+cp "$PLUGIN_SRC/GameMode.qml" "$PLUGIN_DEST/GameMode.qml"
+
+# Register it idempotently — re-running activate must not pile up duplicate
+# plugin/layout entries each time.
+if [[ -f "$HOME/.config/omarchy/shell.json" ]]; then
+    JQFILTER=$(mktemp)
+    trap 'rm -f "$JQFILTER"' EXIT
+    cat << 'JQEOF' > "$JQFILTER"
+if (.plugins // [] | any(.id == "user.gamemode")) then . else (.plugins += [{"id": "user.gamemode"}]) end
+| if (.bar.layout.right // [] | any(.id == "user.gamemode")) then . else (.bar.layout.right = [{"id": "user.gamemode"}] + .bar.layout.right) end
+JQEOF
+    jq -f "$JQFILTER" "$HOME/.config/omarchy/shell.json" > "$HOME/.config/omarchy/shell.json.tmp"
+    mv "$HOME/.config/omarchy/shell.json.tmp" "$HOME/.config/omarchy/shell.json"
+else
+    echo "WARNING: ~/.config/omarchy/shell.json not found — skipping bar widget registration."
+fi
+
+# ─── 3. Configure SDDM autologin (defaulting to desktop) ───────────────────
+
+echo "Configuring SDDM autologin..."
+sudo mkdir -p /etc/sddm.conf.d
+
+if [[ -f /etc/sddm.conf.d/autologin.conf ]]; then
+    sudo rm -f /etc/sddm.conf.d/autologin.conf
+fi
+
+# omarchy:heredoc-expands paths=none -- $USER is a username, not a path;
+# this is the same invoking-user autologin the desktop session already uses.
+cat <<EOF | sudo tee /etc/sddm.conf.d/zz-steamos-autologin.conf > /dev/null
+[Autologin]
+User=${USER}
+Session=omarchy.desktop
+Relogin=true
+EOF
+
+# ─── 4. Reload systemd and the shell ────────────────────────────────────────
+
+echo "Reloading systemd..."
+systemctl --user daemon-reload
+
+echo "Restarting shell..."
+omarchy restart shell >/dev/null 2>&1 &
+
+echo ""
+echo "=== Steam Game Mode Activated ==="
+echo "The Game Mode toggle has been added to your status bar."
+echo ""
+echo "  Super + Alt + B  →  Enter Game Mode"
+echo "  (bind it yourself: o.bind(\"SUPER + ALT + B\", \"Enter Game Mode\","
+echo "   \"omarchy-launch-floating-terminal-with-presentation omarchy-steamos-session-interactive\")"
+echo "   in ~/.config/hypr/bindings.lua — SUPER + ALT + G collides with"
+echo "   Omarchy's stock 'move window out of group' tiling binding)"
+echo "  Steam → Switch to Desktop  →  Return to Omarchy"
+echo ""
+echo "VRR / Adaptive Sync:"
+echo "  gamescope detects your display's real max refresh rate at each launch"
+echo "  and passes it to -r --adaptive-sync. Steam's gamepadui resets"
+echo "  gamescope's adaptive-sync ConVar to off a few seconds into its own"
+echo "  startup, so omarchy-gamescope-vrr-force.service keeps re-asserting"
+echo "  it via 'gamescopectl adaptive_sync 1' every 15s for the life of the"
+echo "  session. Check 'journalctl --user -u omarchy-gamescope-session.service'"
+echo "  for a vrr_capable diagnostic if VRR still doesn't engage."

@@ -1,0 +1,18 @@
+[Unit]
+Description=Steam Launcher (Game Mode)
+After=graphical-session.target
+PartOf=graphical-session.target
+After=xdg-desktop-portal.service
+
+[Service]
+ExecStart=/usr/bin/bash -c 'exec steam -steamos3 -gamepadui -steamdeck'
+# Boot loop protection
+ExecStartPre=/usr/lib/steamos/steam-short-session-tracker --track-started
+ExecStopPost=/usr/lib/steamos/steam-short-session-tracker --track-stopped
+# Steam doesn't forward signals — kill its child process
+ExecStop=/bin/bash -c 'kill -TERM $(pgrep -P $MAINPID || echo $MAINPID)'
+KillSignal=SIGCONT
+KillMode=mixed
+TimeoutStopSec=60
+Type=exec
+EnvironmentFile=%t/gamescope-environment

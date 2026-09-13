@@ -1,0 +1,63 @@
+#!/bin/bash
+# omarchy:summary=Boot loop tracker for Steam Big Picture
+
+SHORT_SESSION_FILE="/tmp/steamos-short-session-tracker"
+SHORT_SESSION_START="/tmp/steamos-short-session-start"
+SHORT_SESSION_DURATION=60
+SHORT_SESSION_MAX_FAILURES=3
+
+do_recover() {
+    echo >&2 "steam-short-session-tracker: Too many short sessions! Reverting to desktop."
+
+    # Delegate to omarchy-steamos-session-select, which already knows how to
+    # discover the active seat0 user and write the autologin config - this
+    # always runs as that same user, so the sudoers NOPASSWD grant covers it.
+    sudo -n /usr/bin/omarchy-steamos-session-select plasma || true
+
+    # Rearm the tracker
+    rm -f "$SHORT_SESSION_FILE"
+}
+
+handle_started() {
+    local count=0
+    if [[ -f "$SHORT_SESSION_FILE" ]]; then
+        count=$(wc -l < "$SHORT_SESSION_FILE")
+    fi
+    date +%s > "$SHORT_SESSION_START"
+
+    if [[ "$count" -ge "$SHORT_SESSION_MAX_FAILURES" ]]; then
+        echo >&2 "steam-short-session-tracker: Detected $count consecutive short sessions (threshold: $SHORT_SESSION_MAX_FAILURES)"
+        do_recover
+        exit 1
+    fi
+}
+
+handle_stopped() {
+    if [[ ! -f "$SHORT_SESSION_START" ]]; then
+        return
+    fi
+
+    local start_time
+    start_time=$(cat "$SHORT_SESSION_START")
+    local now
+    now=$(date +%s)
+    local elapsed=$(( now - start_time ))
+
+    if [[ "$elapsed" -lt "$SHORT_SESSION_DURATION" ]]; then
+        echo "short" >> "$SHORT_SESSION_FILE"
+        echo >&2 "steam-short-session-tracker: Short session detected (${elapsed}s < ${SHORT_SESSION_DURATION}s threshold)"
+    else
+        # Session lasted long enough — clear the tracker
+        rm -f "$SHORT_SESSION_FILE"
+    fi
+}
+
+case "$1" in
+    --track-started)  handle_started ;;
+    --track-stopped)  handle_stopped ;;
+    --recover-now)    do_recover ;;
+    *)
+        echo "Usage: $0 --track-started | --track-stopped | --recover-now"
+        exit 1
+        ;;
+esac

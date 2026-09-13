@@ -1,0 +1,56 @@
+#!/bin/bash
+# omarchy:summary=Switch between Desktop and Steam Game Mode
+
+# ROOT EXECUTION (via sudoers passwordless grant)
+# This handles the SDDM configuration and session teardown
+if [[ $EUID -eq 0 ]]; then
+    SESSION="$1"
+    GAME_USER=$(loginctl list-sessions | awk '$3 != "root" && $3 != "sddm" && $4 == "seat0" {print $3}' | head -n 1)
+    if [[ -z "$GAME_USER" ]]; then
+        echo "Error: No active seat0 user session found." >&2
+        exit 1
+    fi
+
+    echo "[Autologin]" > /etc/sddm.conf.d/zz-steamos-autologin.conf
+    echo "User=${GAME_USER}" >> /etc/sddm.conf.d/zz-steamos-autologin.conf
+    echo "Relogin=true" >> /etc/sddm.conf.d/zz-steamos-autologin.conf
+
+    USER_UID=$(id -u "$GAME_USER")
+
+    if [[ "$SESSION" == "plasma" ]]; then
+        # Switch TO desktop (called by Steam's "Return to Desktop" button)
+        echo "Session=omarchy.desktop" >> /etc/sddm.conf.d/zz-steamos-autologin.conf
+
+        # Shut down Steam first, then stop the gamescope session target.
+        # This causes start-gamescope-session to exit cleanly, and SDDM
+        # auto-logs in to the desktop session.
+        sudo -u "$GAME_USER" XDG_RUNTIME_DIR=/run/user/${USER_UID} steam -shutdown 2>/dev/null || true
+        sudo -u "$GAME_USER" XDG_RUNTIME_DIR=/run/user/${USER_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus \
+            systemctl --user stop omarchy-gamescope-session.target 2>/dev/null || true
+    else
+        # Switch TO gamescope (called by keybinding in Hyprland)
+        echo "Session=omarchy-gamescope-session.desktop" >> /etc/sddm.conf.d/zz-steamos-autologin.conf
+
+        # Gracefully terminate the current Hyprland/uwsm session so
+        # SDDM can auto-login to the gamescope session.
+        sudo -u "$GAME_USER" XDG_RUNTIME_DIR=/run/user/${USER_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus \
+            uwsm stop 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+# USER EXECUTION
+case "$1" in
+    plasma|desktop)
+        echo "Switching to Desktop..."
+        sudo -n /usr/bin/omarchy-steamos-session-select plasma
+        ;;
+    gamescope|gamemode)
+        echo "Switching to Game Mode..."
+        sudo -n /usr/bin/omarchy-steamos-session-select gamescope
+        ;;
+    *)
+        echo "Usage: $0 {plasma|desktop|gamescope|gamemode}"
+        exit 1
+        ;;
+esac

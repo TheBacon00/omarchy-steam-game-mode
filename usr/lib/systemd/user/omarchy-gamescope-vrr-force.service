@@ -1,0 +1,10 @@
+[Unit]
+Description=Force-enable Adaptive Sync (VRR) in Gamescope Session
+PartOf=omarchy-gamescope-session.target
+After=omarchy-gamescope-session.service omarchy-steam-launcher.service
+
+[Service]
+ExecStart=/usr/lib/steamos/gamescope-vrr-force
+Restart=on-failure
+RestartSec=2
+EnvironmentFile=%t/gamescope-environment

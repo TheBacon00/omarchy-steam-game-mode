@@ -1,0 +1,9 @@
+[Unit]
+Description=sxhkd daemon for Gamescope session media keys
+PartOf=omarchy-gamescope-session.target
+After=omarchy-gamescope-session.target
+
+[Service]
+ExecStart=/usr/bin/sxhkd -c /usr/lib/steamos/sxhkdrc
+Restart=always
+EnvironmentFile=%t/gamescope-environment

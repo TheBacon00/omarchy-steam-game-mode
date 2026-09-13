@@ -1,0 +1,13 @@
+[Unit]
+Description=Gamescope Session Target
+Requires=graphical-session.target
+BindsTo=graphical-session.target
+After=graphical-session.target
+PropagatesStopTo=graphical-session.target
+
+Requires=omarchy-gamescope-session.service
+BindsTo=omarchy-gamescope-session.service
+
+Upholds=omarchy-steam-launcher.service
+Upholds=omarchy-gamescope-vrr-force.service
+Upholds=omarchy-gamescope-sxhkd.service

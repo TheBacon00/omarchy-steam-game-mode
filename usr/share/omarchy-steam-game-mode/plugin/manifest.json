@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy.gamemode",
+  "name": "Game Mode",
+  "version": "1.0.0",
+  "author": "Omarchy",
+  "description": "Toggle Steam Game Mode",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "GameMode.qml" },
+  "barWidget": {
+    "displayName": "Game Mode",
+    "description": "Toggle Steam Game Mode",
+    "category": "System",
+    "allowMultiple": false
+  }
+}

@@ -1,0 +1,33 @@
+#!/bin/bash
+# omarchy:summary=Entrypoint for the Gamescope Wayland Session
+
+# Clean up any leftover state from a previous session
+systemctl --user stop omarchy-gamescope-session.target 2>/dev/null || true
+systemctl --user stop graphical-session-pre.target 2>/dev/null || true
+systemctl --user reset-failed 2>/dev/null || true
+
+# Export session environment to systemd and dbus
+dbus-update-activation-environment --systemd DESKTOP_SESSION $(env | grep XDG_ | cut -d = -f 1) 2>/dev/null || true
+
+# Prevent irrelevant desktop portals from starting
+systemctl --user set-environment XDG_DESKTOP_PORTAL_DIR="" 2>/dev/null || true
+
+# Remove DISPLAY/XAUTHORITY from user env — gamescope will set these
+systemctl --user unset-environment DISPLAY XAUTHORITY 2>/dev/null || true
+
+# If this script is killed, bring down the gamescope session cleanly
+trap 'systemctl --user stop omarchy-gamescope-session.target 2>/dev/null || true' HUP INT TERM
+
+# Start and wait for gamescope-session target
+systemctl --user --wait start omarchy-gamescope-session.target &
+wait
+
+logger "Gamescope Session Ended - Performing Final Cleanup"
+
+# Wait for all dependent targets to stop
+systemctl --user stop graphical-session-pre.target 2>/dev/null || true
+
+# Restore portal discovery
+systemctl --user unset-environment XDG_DESKTOP_PORTAL_DIR 2>/dev/null || true
+
+logger "Gamescope Session Ended - Cleanup Complete"

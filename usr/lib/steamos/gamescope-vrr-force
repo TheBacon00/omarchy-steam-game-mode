@@ -1,0 +1,21 @@
+#!/bin/bash
+# omarchy:summary=Keep adaptive-sync forced on against Steam's own startup preference
+
+# Gamescope's adaptive-sync is a runtime ConVar (cv_adaptive_sync), off by
+# default. --adaptive-sync flips it on at gamescope startup, but Steam's
+# gamepadui writes an X11 root atom (GAMESCOPE_VRR_ENABLED) a few seconds into
+# its own startup that gamescope uses to directly overwrite that ConVar back
+# off - this is Steam's own stated default preference, independent of whether
+# its in-UI VRR toggle is visible or reachable. So instead of fighting Steam's
+# UI, keep re-asserting the ConVar directly via gamescopectl (a thin CLI over
+# gamescope's private wayland protocol) for the life of the session. This is
+# idempotent and cheap, so looping it is the robust fix rather than a one-shot
+# race against Steam's startup timing.
+
+# Give Steam's gamepadui time to finish its own startup (including its
+# preference write that turns adaptive sync back off) before overriding it.
+sleep 5
+while true; do
+    gamescopectl adaptive_sync 1 >/dev/null 2>&1
+    sleep 15
+done

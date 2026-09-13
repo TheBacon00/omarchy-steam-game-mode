@@ -1,0 +1,17 @@
+XF86AudioRaiseVolume
+    omarchy-audio-output-volume raise
+
+XF86AudioLowerVolume
+    omarchy-audio-output-volume lower
+
+XF86AudioMute
+    omarchy-audio-output-volume mute-toggle
+
+XF86AudioMicMute
+    omarchy-audio-input-mute
+
+XF86MonBrightnessUp
+    omarchy-brightness-display +5%
+
+XF86MonBrightnessDown
+    omarchy-brightness-display 5%-

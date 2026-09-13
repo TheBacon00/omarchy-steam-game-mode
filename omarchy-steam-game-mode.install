@@ -1,0 +1,32 @@
+post_install() {
+    cat <<'EOF'
+==> Steam Game Mode installed.
+==> Run this once, as your own user (not root or sudo), to activate it:
+==>
+==>   omarchy-steam-game-mode-activate
+==>
+EOF
+}
+
+post_upgrade() {
+    cat <<'EOF'
+==> Steam Game Mode updated.
+==> If systemd units changed, re-run as your own user to pick them up:
+==>
+==>   omarchy-steam-game-mode-activate
+==>
+EOF
+}
+
+pre_remove() {
+    cat <<'EOF'
+==> Before removing, deactivate Steam Game Mode as your own user:
+==>
+==>   omarchy-steam-game-mode-deactivate
+==>
+==> Skipping this leaves stale SDDM autologin config and a stray bar-widget
+==> registration behind — harmless once this package's own files are gone,
+==> but worth cleaning up first.
+==>
+EOF
+}

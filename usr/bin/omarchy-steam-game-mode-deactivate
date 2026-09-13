@@ -1,0 +1,54 @@
+#!/bin/bash
+# omarchy:summary=Deactivate Steam Game Mode for the current user
+
+set -uo pipefail
+# Note: deliberately no -e — this is best-effort cleanup, and one missing
+# file shouldn't abort the rest of it.
+
+if [[ $EUID -eq 0 ]]; then
+    echo "ERROR: Run this as your own user, not as root or via sudo."
+    echo "       It cleans up \$HOME and elevates internally where needed."
+    exit 1
+fi
+
+echo "=== Deactivating Steam Game Mode ==="
+
+# Gracefully stop the session first if it's currently active.
+systemctl --user stop omarchy-gamescope-session.target 2>/dev/null || true
+
+# Restore plain SDDM autologin.
+echo "Restoring SDDM autologin..."
+sudo rm -f /etc/sddm.conf.d/zz-steamos-autologin.conf
+
+# omarchy:heredoc-expands paths=none -- $USER is a username, not a path;
+# this restores the plain autologin the desktop session used before Game
+# Mode was activated.
+cat <<EOF | sudo tee /etc/sddm.conf.d/autologin.conf > /dev/null
+[Autologin]
+User=${USER}
+Session=omarchy.desktop
+EOF
+sudo chown "$USER" /etc/sddm.conf.d/autologin.conf
+sudo chmod 664 /etc/sddm.conf.d/autologin.conf
+
+systemctl --user daemon-reload
+
+# Remove the bar widget registration.
+echo "Removing bar widget..."
+if [[ -f "$HOME/.config/omarchy/shell.json" ]]; then
+    jq 'del(.plugins[]? | select(.id == "user.gamemode"))
+        | del(.bar.layout.right[]? | select(.id == "user.gamemode"))
+        | del(.bar.layout.left[]? | select(.id == "user.gamemode"))
+        | del(.bar.layout.center[]? | select(.id == "user.gamemode"))' \
+        "$HOME/.config/omarchy/shell.json" > "$HOME/.config/omarchy/shell.json.tmp"
+    mv "$HOME/.config/omarchy/shell.json.tmp" "$HOME/.config/omarchy/shell.json"
+fi
+rm -rf "$HOME/.config/omarchy/plugins/user.gamemode"
+
+echo "Restarting shell..."
+omarchy restart shell >/dev/null 2>&1 &
+
+echo ""
+echo "=== Steam Game Mode Deactivated ==="
+echo "Package files are still installed — remove them with:"
+echo "  sudo pacman -R omarchy-steam-game-mode"

@@ -1,0 +1,15 @@
+#!/bin/bash
+# omarchy:summary=Prompt for confirmation before switching to Steam Game Mode
+
+if ! command -v gamescope &>/dev/null; then
+    gum style --foreground 212 "Game Mode is not installed."
+    echo ""
+    echo "Install the omarchy-steam-game-mode package, then run:"
+    echo "  omarchy-steam-game-mode-activate"
+    sleep 4
+    exit 1
+fi
+
+if gum confirm 'Switch to Game Mode? This will close all desktop applications.'; then
+    /usr/bin/omarchy-steamos-session-select gamemode
+fi
